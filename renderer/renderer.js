@@ -1881,6 +1881,7 @@
   function fillSettings() {
     // Keys tab
     document.querySelectorAll('#provider-seg button').forEach((b) => b.classList.toggle('on', b.dataset.provider === settings.provider));
+    if ($('#key-grok')) $('#key-grok').value = settings.apiKeys.grok || '';
     $('#key-openai').value = settings.apiKeys.openai || '';
     $('#key-anthropic').value = settings.apiKeys.anthropic || '';
     $('#key-gemini').value = settings.apiKeys.gemini || '';
@@ -1977,6 +1978,10 @@
   function statusText() {
     const k = settings.apiKeys || {};
     const labels = {
+      'claude-cli': 'Claude CLI',
+      'codex-cli': 'Codex CLI',
+      'grok-cli': 'Grok CLI',
+      grok: 'Grok',
       openai: 'OpenAI',
       anthropic: 'Anthropic',
       gemini: 'Gemini',
@@ -1990,8 +1995,15 @@
     // 'auto' walks the same fallback chain src/stt.js builds; an explicit choice
     // is reported as-is so the status line matches what will actually be used.
     const selectedSttProvider = settings.sttProvider || 'auto';
-    const automaticStt = k.deepgram ? 'Deepgram (streaming)' : (k.openai ? 'OpenAI Realtime' : (k.groq ? 'Groq Whisper' : (k.gemini ? 'Gemini (batch)' : 'none')));
-    const sttLabels = { local: 'Local whisper', deepgram: 'Deepgram', openai: 'OpenAI', gemini: 'Gemini', auto: automaticStt };
+    const hasGrokVoice = !!(k.grok || settings.provider === 'grok' || settings.provider === 'grok-cli');
+    const automaticStt = k.deepgram
+      ? 'Deepgram (streaming)'
+      : (k.openai
+        ? 'OpenAI Realtime'
+        : (hasGrokVoice
+          ? 'Grok voice'
+          : (k.groq ? 'Groq Whisper' : (k.gemini ? 'Gemini (batch)' : 'none'))));
+    const sttLabels = { grok: 'Grok voice', local: 'Local whisper', deepgram: 'Deepgram', openai: 'OpenAI', gemini: 'Gemini', auto: automaticStt };
     const stt = selectedSttProvider === 'auto' ? automaticStt : (sttLabels[selectedSttProvider] || selectedSttProvider);
     const ready = [
       settings.resumeText ? '✓ resume' : null,
@@ -2167,6 +2179,7 @@
   async function saveSettings() {
     // Keys
     if (!settings.apiKeys) settings.apiKeys = {};
+    if ($('#key-grok')) settings.apiKeys.grok = $('#key-grok').value.trim();
     settings.apiKeys.openai = $('#key-openai').value.trim();
     settings.apiKeys.anthropic = $('#key-anthropic').value.trim();
     settings.apiKeys.gemini = $('#key-gemini').value.trim();
