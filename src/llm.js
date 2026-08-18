@@ -7,6 +7,14 @@ const { isCliProvider, streamCliProvider, cliProviderReady } = require('./cli-ll
 
 const CUSTOM_PROVIDER = 'custom';
 const GROK_PROVIDER = 'grok';
+// "Grok CLI" in Settings means: use your `grok login` session (no pasted key).
+// Chat goes through the xAI HTTP API with that token — same path as provider "grok".
+// Spawning `grok -p` is agent-mode, flaky for interview overlay turns, and is not
+// what the working Grok path used.
+const GROK_CLI_PROVIDER = 'grok-cli';
+function isGrokHttpProvider(provider) {
+  return provider === GROK_PROVIDER || provider === GROK_CLI_PROVIDER;
+}
 // gemini-2.0-flash was Google's default here until it was deprecated (Feb 2026)
 // and fully retired (Mar 3 2026) — every request against it now 404s with a
 // generic "exception parsing response" body. gemini-2.5-flash is the model
@@ -339,15 +347,17 @@ function createLLM(settings) {
     if (!model && !configurationError) {
       configurationError = 'Set a Fast or Smart model for the Custom provider.';
     }
-  } else if (provider === GROK_PROVIDER) {
+  } else if (isGrokHttpProvider(provider)) {
     // Re-resolve on every create so a refreshed Grok CLI OAuth token is picked up.
+    // Both "grok" and "grok-cli" use this path — login session → api.x.ai streaming.
     apiKey = resolveGrokApiKey(keys.grok);
     baseURL = XAI_BASE_URL;
+    if (!model) model = DEFAULT_MODELS[provider] || DEFAULT_MODELS.grok;
     if (!apiKey) {
       configurationError = 'Sign in with `grok login`, set XAI_API_KEY, or paste an xAI API key in Settings.';
     }
   } else if (isCliProvider(provider)) {
-    // CLI providers use the local login session — no API key stored in cue.
+    // Claude / Codex CLI: local binary login session — no API key stored in cue.
     if (!model) model = DEFAULT_MODELS[provider] || 'default';
     const probe = cliProviderReady(provider);
     if (!probe.ok) configurationError = probe.error;
@@ -361,8 +371,9 @@ function createLLM(settings) {
     configurationError = 'Add your Azure AI Foundry endpoint in Settings.';
   }
 
-  // CLI backends treat model "default" as "whatever the CLI is logged into".
-  const modelReady = isCliProvider(provider) ? true : !!model;
+  // Claude/Codex CLI: model "default" means "whatever the CLI is logged into".
+  // Grok HTTP providers still need a real model id.
+  const modelReady = (isCliProvider(provider) && !isGrokHttpProvider(provider)) ? true : !!model;
   const ready = !configurationError && modelReady;
   const maxTokens = settings.smart ? 1400 : 700;
 
@@ -373,20 +384,23 @@ function createLLM(settings) {
     async stream(params) {
       if (!ready) throw new Error(configurationError || `Complete the ${provider} provider settings.`);
       // Refresh Grok credentials right before the request in case CLI refreshed the token.
-      const liveKey = provider === GROK_PROVIDER ? resolveGrokApiKey(keys.grok) : apiKey;
-      if (provider === GROK_PROVIDER && !liveKey) {
+      const liveKey = isGrokHttpProvider(provider) ? resolveGrokApiKey(keys.grok) : apiKey;
+      if (isGrokHttpProvider(provider) && !liveKey) {
         throw new Error('Grok credentials expired or missing. Run `grok login` and try again.');
       }
       const args = { apiKey: liveKey, baseURL, endpoint, model, maxTokens, ...params, turns: sanitizeTurns(params.turns) };
-      // CLI model override: blank / "default" means let the CLI pick.
-      if (isCliProvider(provider) && (!args.model || args.model === 'default')) {
+      // Claude/Codex: blank / "default" means let the CLI pick.
+      if (isCliProvider(provider) && !isGrokHttpProvider(provider) && (!args.model || args.model === 'default')) {
         args.model = '';
       }
       try {
+        // Grok + Grok CLI → streaming xAI API (uses `grok login` token). Not the agent binary.
+        if (isGrokHttpProvider(provider)) {
+          return await streamOpenAI({ ...args, apiKey: liveKey, baseURL: XAI_BASE_URL });
+        }
         if (isCliProvider(provider)) return await streamCliProvider(provider, args);
         if (provider === 'openai') return await streamOpenAI(args);
         if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);
-        if (provider === GROK_PROVIDER) return await streamOpenAI(args);
         if (provider === 'ollama') return await streamOllama(args);
         if (provider === 'groq') return await streamOpenAI({ ...args, baseURL: 'https://api.groq.com/openai/v1' });
         if (provider === 'minimax') return await streamOpenAI({ ...args, baseURL: MINIMAX_BASE_URLS[minimaxRegion] || MINIMAX_BASE_URLS.global_en });

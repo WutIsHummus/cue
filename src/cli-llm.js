@@ -244,26 +244,42 @@ async function streamCodexCli({ model, system, turns, imageDataUrl, onToken, onA
 }
 
 /**
- * Grok Build CLI one-shot — uses `grok -p` with the logged-in session.
+ * Grok Build CLI one-shot — uses headless `grok` with the logged-in session.
  * Prefer the API path (provider "grok") for streaming + screenshots; this is a
  * fallback pure-CLI route when the user picks "Grok CLI".
+ *
+ * Note: `-p/--single <PROMPT>` requires the prompt as a flag value (stdin is
+ * ignored). Long context goes through `--prompt-file` to avoid Windows argv
+ * limits and the "a value is required for '--single <PROMPT>'" exit.
  */
 async function streamGrokCli({ model, system, turns, imageDataUrl, onToken, onActivity }) {
   const bin = whichCmd('grok');
   const imagePath = writeTempImage(imageDataUrl);
   const userPrompt = buildUserPrompt(turns, imagePath);
-  const prompt = system
-    ? `${system}\n\n---\n\n${userPrompt}`
+  // Keep system in the file (not --system-prompt-override) so long context
+  // never hits Windows argv limits.
+  const body = system
+    ? `System instructions:\n${system}\n\n---\n\n${userPrompt}`
     : userPrompt;
+  const promptFile = path.join(
+    os.tmpdir(),
+    `cue-grok-prompt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`
+  );
+  fs.writeFileSync(promptFile, body, 'utf8');
 
-  // Prefer stdin so long interview context is not truncated by argv limits.
-  const args = ['-p', '--output-format', 'plain'];
-  if (model) args.push('-m', model);
+  const args = [
+    '--prompt-file', promptFile,
+    '--output-format', 'plain',
+    '--always-approve',
+    '--max-turns', '1',
+    '--no-subagents'
+  ];
+  if (model && model !== 'default') args.push('-m', model);
 
   let full = '';
   try {
     const { stdout } = await runProcess(bin, args, {
-      stdinText: prompt,
+      stdinText: '',
       onActivity,
       timeoutMs: 300000,
       onStdoutChunk: (chunk) => {
@@ -277,6 +293,7 @@ async function streamGrokCli({ model, system, turns, imageDataUrl, onToken, onAc
     return text;
   } finally {
     if (imagePath) try { fs.unlinkSync(imagePath); } catch { /* ignore */ }
+    try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
   }
 }
 
